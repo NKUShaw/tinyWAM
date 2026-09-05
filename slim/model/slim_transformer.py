@@ -524,6 +524,13 @@ class SLIMTransformer(nn.Module):
         self.action_encoder = ActionEncoder(self.action_dim, dim)
         self.action_decoder = MLP(dim, self.hidden_size, self.action_dim)
         self.state_decoder = MLP(dim, self.hidden_size, self.condition_dim)
+        self.future_delta_loss_weight = float(transformer.get("future_delta_loss_weight", 0.0))
+        if self.future_delta_loss_weight < 0:
+            raise ValueError("future_delta_loss_weight must be nonnegative")
+        self.delta_decoder = (
+            MLP(dim, self.hidden_size, self.condition_dim)
+            if self.future_delta_loss_weight > 0 else None
+        )
 
         self.future_mask_tokens = nn.Embedding(self.num_future_tokens, dim)
         nn.init.normal_(self.future_mask_tokens.weight, mean=0.0, std=0.02)
@@ -741,9 +748,11 @@ class SLIMTransformer(nn.Module):
         )
         return F.mse_loss(prediction, velocity)
 
-    def forward_fdm(
-        self, observations, actions, future, language=None, language_mask=None, state=None
+    def predict_future(
+        self, observations, actions, language=None, language_mask=None, state=None,
+        *, return_delta=False,
     ):
+        """Differentiable action-conditioned prediction shared by training and evaluation."""
         if observations.shape[1] != self.num_future_tokens:
             raise ValueError("Observation token count does not match future slots")
         lang_context, lang_mask = self._language_context(language, language_mask)
@@ -754,7 +763,7 @@ class SLIMTransformer(nn.Module):
             actions.shape[0], "fdm", actions.dtype, actions.device
         )
         action_condition = self._action_condition(timesteps, "fdm", actions.dtype)
-        current_rows = observations.shape[1] + int(self.use_state_condition)
+        current_rows = observations.shape[1] + int(self.use_state_condition and state is not None)
         state_output, _ = self.trunk(
             state_tokens,
             action_tokens,
@@ -764,10 +773,36 @@ class SLIMTransformer(nn.Module):
             lang_mask=lang_mask,
             n_state_ctx_rows=current_rows,
         )
-        prediction = self.state_decoder(
-            state_output[:, -self.num_future_tokens :]
+        future_hidden = state_output[:, -self.num_future_tokens :]
+        prediction = self.state_decoder(future_hidden)
+        if return_delta:
+            delta = self.delta_decoder(future_hidden) if self.delta_decoder is not None else None
+            return prediction, delta
+        return prediction
+
+    def forward_fdm(
+        self, observations, actions, future, language=None, language_mask=None, state=None,
+        *, current_target=None, return_details=False,
+    ):
+        prediction, delta = self.predict_future(
+            observations, actions, language, language_mask, state, return_delta=True
         )
-        return self._future_loss(prediction, future)
+        future_loss = self._future_loss(prediction, future)
+        total = future_loss
+        details = {"future_loss": future_loss}
+        if delta is not None:
+            if current_target is None:
+                raise ValueError("Delta supervision requires the current frame from the target encoder")
+            # Normalize the two endpoints; retain the amplitude of their difference.
+            with torch.no_grad():
+                current_n = F.layer_norm(current_target.float(), (current_target.shape[-1],))
+                future_n = F.layer_norm(future.float(), (future.shape[-1],))
+                delta_target = future_n - current_n
+            delta_loss = F.smooth_l1_loss(delta.float(), delta_target)
+            total = total + self.future_delta_loss_weight * delta_loss
+            details["delta_loss"] = delta_loss
+        details["fdm_loss"] = total
+        return details if return_details else total
 
     def forward(
         self,
@@ -778,6 +813,7 @@ class SLIMTransformer(nn.Module):
         language_encoder_attention_mask=None,
         future_vl_embs_cond=None,
         future_vl_embs_target=None,
+        current_vl_embs_target=None,
         mot_task_mode=None,
         repeated_steps=1,
         **unused,
@@ -829,17 +865,19 @@ class SLIMTransformer(nn.Module):
                 "task_mode_id": torch.tensor(1, device=vl_embs.device),
             }
         if mode == "fdm":
-            future = self.forward_fdm(
+            details = self.forward_fdm(
                 vl_embs,
                 actions,
                 target,
                 lang_embs,
                 language_encoder_attention_mask,
                 state,
+                current_target=current_vl_embs_target,
+                return_details=True,
             )
             return {
-                "fdm_loss": future,
-                "action_loss": future,
+                **details,
+                "action_loss": details["fdm_loss"],
                 "task_mode_id": torch.tensor(2, device=vl_embs.device),
             }
 
@@ -851,18 +889,20 @@ class SLIMTransformer(nn.Module):
             language_encoder_attention_mask,
             state,
         )
-        future = self.forward_fdm(
+        details = self.forward_fdm(
             vl_embs,
             actions,
             target,
             lang_embs,
             language_encoder_attention_mask,
             state,
+            current_target=current_vl_embs_target,
+            return_details=True,
         )
-        total = self.idm_loss_weight * inverse + self.fdm_loss_weight * future
+        total = self.idm_loss_weight * inverse + self.fdm_loss_weight * details["fdm_loss"]
         return {
+            **details,
             "idm_loss": inverse,
-            "fdm_loss": future,
             "action_loss": total,
             "task_mode_id": torch.tensor(-2, device=vl_embs.device),
         }
@@ -872,28 +912,15 @@ class SLIMTransformer(nn.Module):
         self,
         vl_embs,
         future,
+        actions=None,
         lang_embs=None,
         language_encoder_attention_mask=None,
         state=None,
     ):
-        language, mask = self._language_context(
-            lang_embs, language_encoder_attention_mask
-        )
-        state_tokens = self._state_tokens(vl_embs, state=state)
-        condition = self._context_condition(
-            vl_embs.shape[0], "fdm", vl_embs.dtype, vl_embs.device
-        )
-        action_condition = torch.zeros_like(condition)
-        state_output, _ = self.trunk(
-            state_tokens,
-            None,
-            condition,
-            action_condition,
-            lang_context=language,
-            lang_mask=mask,
-        )
-        prediction = self.state_decoder(
-            state_output[:, -self.num_future_tokens :]
+        if actions is None:
+            raise ValueError("FDM evaluation requires the demonstrated action chunk")
+        prediction = self.predict_future(
+            vl_embs, actions, lang_embs, language_encoder_attention_mask, state
         )
         return self._future_loss(prediction, future)
 

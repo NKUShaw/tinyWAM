@@ -61,6 +61,15 @@ evaluation environments.
 
 ## Training
 
+### tinyWAM control-latent experiments
+
+Optional factorized control representations, feature decorrelation, 64 visual
+control tokens, latent-change prediction, and Stage 2 dynamics regularization
+are available under `configs/libero/control_latent/`. Existing configs keep these
+features disabled. See [the execution guide](docs/control_latent_experiments.md)
+for warm-starting from existing DINOv3 checkpoints, matched ablations, smoke
+tests, training, and offline dynamics evaluation.
+
 The launch helpers use eight GPUs by default. Override `NPROC_PER_NODE` and
 `CUDA_VISIBLE_DEVICES` when using a different topology; adjust per-device batch
 size if the global batch size should remain 128.

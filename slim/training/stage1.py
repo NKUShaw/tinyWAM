@@ -59,6 +59,9 @@ def _sync_ema_vision_from_online(model) -> None:
         return
     if getattr(model, "ema_vision_encoder", None) is None:
         return
+    if hasattr(model, "sync_ema_from_online"):
+        model.sync_ema_from_online()
+        return
     model.ema_vision_encoder.load_state_dict(model.vision_encoder.state_dict())
     if hasattr(model, "refresh_ema_fp32_shadow"):
         model.refresh_ema_fp32_shadow()
@@ -71,6 +74,9 @@ def _load_initial_weights(
     init_mode: str = "slim_policy",
     skip_prefixes: tuple[str, ...] = (),
 ):
+    if init_mode == "control_warm_start":
+        from slim.model.initialization import load_control_warm_start
+        return load_control_warm_start(model, ckpt_path, logger, skip_prefixes)
     state_dict = torch.load(ckpt_path, map_location="cpu")
     model_sd = model.state_dict()
     if init_mode == "vision_only":
@@ -290,6 +296,10 @@ def main(
                 "train/fdm_loss": scalar_or_none(loss_dict.get("fdm_loss")),
                 "train/lr": float(scheduler.get_last_lr()[0]),
             }
+            for key in ("future_loss", "delta_loss", "representation_loss", "reconstruction_loss",
+                        "decorrelation_loss", "variance_loss"):
+                if key in loss_dict:
+                    payload[f"train/{key}"] = scalar_or_none(loss_dict[key])
             if "wandb" in cfg.logging.trackers:
                 wandb.log(payload, step=completed_steps)
             logger.info(f"[train] step={completed_steps} {payload}")
@@ -303,22 +313,22 @@ def main(
                 continue
             model_unwrapped = accelerator.unwrap_model(model)
             metrics = compute_eval_metrics(model_unwrapped, val_batch, cfg=cfg)
-            future_latent_mse = None
+            fdm_future_loss = None
             if all("future_image" in x for x in val_batch):
                 try:
-                    future_latent_mse = model_unwrapped.eval_future_latent(val_batch)
+                    fdm_future_loss = model_unwrapped.eval_future_latent(val_batch)
                 except Exception:
                     pass
             if accelerator.is_main_process:
                 log_payload = {f"eval/{k}": v for k, v in metrics.items() if not k.endswith("_first")}
                 log_payload["eval/epoch"] = completed_steps / float(steps_per_epoch)
-                if future_latent_mse is not None:
-                    log_payload["eval/future_latent_mse"] = future_latent_mse
+                if fdm_future_loss is not None:
+                    log_payload["eval/fdm_future_loss"] = fdm_future_loss
                 with torch.no_grad():
                     log_payload.update(build_monitor_collapse_payload(loss_dict, include_svd=True))
                 if "wandb" in cfg.logging.trackers:
                     wandb.log(log_payload, step=completed_steps)
-                future_mse_str = f" future_latent_mse={future_latent_mse:.6f}" if future_latent_mse is not None else ""
+                future_mse_str = f" fdm_future_loss={fdm_future_loss:.6f}" if fdm_future_loss is not None else ""
                 logger.info(
                     f"[eval] step={completed_steps} epoch={log_payload['eval/epoch']:.2f} "
                     f"{format_eval_metrics_log(metrics)}"

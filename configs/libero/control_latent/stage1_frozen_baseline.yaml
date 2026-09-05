@@ -1,0 +1,8 @@
+defaults:
+  - ../stage1_dinov3_vits16_d384_h6.yaml
+run:
+  root: checkpoints/control_latent/stage1
+  name: frozen_baseline
+model:
+  vision_encoder:
+    freeze_backbone: true

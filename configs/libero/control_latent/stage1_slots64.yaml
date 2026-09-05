@@ -1,0 +1,9 @@
+defaults:
+  - stage1_decorrelated.yaml
+run:
+  name: control_slots64
+model:
+  control_latent:
+    tokens_per_view: 32
+  transformer:
+    num_future_tokens: 64

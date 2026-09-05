@@ -21,6 +21,7 @@ from .defaults import SLIMDefaultConfig
 from .image_augment import apply_image_augment, build_training_image_augment
 from .vision_encoder import build_vision_encoder
 from .wrist_detail import HighResolutionWristAdapter
+from .control_latent import FactorizedControlEncoder
 
 from .slim_transformer import SLIMTransformer
 
@@ -63,6 +64,25 @@ class SLIMModel(PolicyModel):
                 vision_hidden, int(wrist_detail_cfg.get("bottleneck_dim", 96))
             )
 
+        control_cfg = self.config.framework.get("control_latent", {})
+        self.control_latent_enabled = bool(control_cfg.get("enabled", False))
+        self.control_encoder = None
+        if self.control_latent_enabled:
+            if self.vision_condition_mode != "dense_patch":
+                raise ValueError("control_latent requires dense_patch inputs")
+            if not dino_cfg.get("freeze_backbone", True):
+                raise ValueError("The initial control_latent recipe requires a frozen vision backbone")
+            if self.wrist_detail_enabled:
+                raise ValueError("Run control_latent and wrist_detail as separate experiments")
+            patches = getattr(self.vision_encoder, "num_patches", None)
+            if patches is None:
+                raise ValueError("control_latent requires an encoder with explicit num_patches")
+            self.control_encoder = FactorizedControlEncoder(
+                vision_hidden, self.num_image_views, int(patches),
+                int(self.config.framework.action_model.get("language_embedding_dim", 512)),
+                control_cfg,
+            )
+
         if self.vision_condition_mode == "cls":
             cond_dim = vision_hidden * self.num_image_views
         elif self.vision_condition_mode == "dense_patch":
@@ -70,6 +90,8 @@ class SLIMModel(PolicyModel):
             patches_per_view = getattr(self.vision_encoder, "num_patches", None)
             if patches_per_view is not None:
                 expected_tokens = self.num_image_views * int(patches_per_view)
+                if self.control_encoder is not None:
+                    expected_tokens = self.control_encoder.output_tokens
                 configured_tokens = int(
                     self.config.framework.action_model.mot.get(
                         "num_future_tokens", expected_tokens
@@ -78,8 +100,8 @@ class SLIMModel(PolicyModel):
                 if configured_tokens != expected_tokens:
                     raise ValueError(
                         "Dense visual token mismatch: "
-                        f"{self.num_image_views} views x {patches_per_view} patches = "
-                        f"{expected_tokens}, but num_future_tokens={configured_tokens}"
+                        f"representation has {expected_tokens} tokens, "
+                        f"but num_future_tokens={configured_tokens}"
                     )
         else:
             raise ValueError(
@@ -91,10 +113,14 @@ class SLIMModel(PolicyModel):
         ema_cfg = self.config.framework.get("ema", {})
         self.ema_enabled = bool(ema_cfg.get("enabled", False))
         self.ema_momentum = float(ema_cfg.get("momentum", 0.999))
+        self.ema_control_encoder = None
         if self.ema_enabled:
             self.ema_vision_encoder = copy.deepcopy(self.vision_encoder)
             for p in self.ema_vision_encoder.parameters():
                 p.requires_grad = False
+            if self.control_encoder is not None:
+                self.ema_control_encoder = copy.deepcopy(self.control_encoder)
+                self.ema_control_encoder.requires_grad_(False)
             self._init_ema_fp32_shadow()
         else:
             self.ema_vision_encoder = None
@@ -103,6 +129,13 @@ class SLIMModel(PolicyModel):
         # Keep module attribute names stable for checkpoint compatibility.
         self.config.framework.action_model.diffusion_model_cfg.cross_attention_dim = cond_dim
         self.action_model = SLIMTransformer(full_config=self.config)
+        dynamics_cfg = self.config.framework.get("policy_dynamics", {})
+        self.policy_dynamics_enabled = bool(dynamics_cfg.get("enabled", False))
+        self.policy_dynamics_weight = float(dynamics_cfg.get("loss_weight", 0.1))
+        if self.policy_dynamics_enabled and not self.ema_enabled:
+            raise ValueError("policy_dynamics requires EMA targets")
+        if self.policy_dynamics_enabled and self.policy_dynamics_weight <= 0:
+            raise ValueError("policy_dynamics.loss_weight must be positive")
         if self.wrist_detail_enabled and bool(wrist_detail_cfg.get("freeze_except_adapter", False)):
             for parameter in self.parameters():
                 parameter.requires_grad = False
@@ -146,6 +179,16 @@ class SLIMModel(PolicyModel):
         self.lang_tokenizer = None
         self.lang_encoder = None
         self._load_offline_language_embeddings()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.control_latent_enabled:
+            self.vision_encoder.eval()
+            if self.ema_vision_encoder is not None:
+                self.ema_vision_encoder.eval()
+            if self.ema_control_encoder is not None:
+                self.ema_control_encoder.eval()
+        return self
 
     # -- Language helpers (identical to DINO_MoT) ----------------------------
 
@@ -301,10 +344,18 @@ class SLIMModel(PolicyModel):
         batch_images,
         lang_embs: torch.Tensor | None = None,
         lang_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        *,
+        return_aux: bool = False,
+    ):
         """Online encoder used for current-frame embeddings (gradients flow through)."""
         batch_images = self._maybe_augment_images(batch_images)
-        return self._encode_vision_with(batch_images, self.vision_encoder)
+        features = self._encode_vision_with(batch_images, self.vision_encoder)
+        auxiliary = {}
+        if self.control_encoder is not None:
+            features, auxiliary = self.control_encoder(
+                features, lang_embs, lang_mask, compute_aux=return_aux
+            )
+        return (features, auxiliary) if return_aux else features
 
     @torch.no_grad()
     def _encode_vision_ema(
@@ -315,13 +366,30 @@ class SLIMModel(PolicyModel):
     ) -> torch.Tensor:
         """EMA encoder used as target for future latents (no gradient)."""
         if self.ema_enabled:
-            return self._encode_vision_with(batch_images, self.ema_vision_encoder)
+            features = self._encode_vision_with(batch_images, self.ema_vision_encoder)
+            if self.ema_control_encoder is not None:
+                features, _ = self.ema_control_encoder(features, lang_embs, lang_mask)
+            return features
         return self._encode_vision(batch_images, lang_embs=lang_embs, lang_mask=lang_mask).detach()
+
+    def _ema_parameter_pairs(self):
+        pairs = list(zip(self.vision_encoder.parameters(), self.ema_vision_encoder.parameters()))
+        if self.ema_control_encoder is not None:
+            pairs.extend(zip(self.control_encoder.parameters(), self.ema_control_encoder.parameters()))
+        return pairs
+
+    def sync_ema_from_online(self):
+        if not self.ema_enabled:
+            return
+        self.ema_vision_encoder.load_state_dict(self.vision_encoder.state_dict())
+        if self.ema_control_encoder is not None:
+            self.ema_control_encoder.load_state_dict(self.control_encoder.state_dict())
+        self.refresh_ema_fp32_shadow()
 
     def _init_ema_fp32_shadow(self) -> None:
         """Keep EMA accumulation in fp32 even when the model runs in bf16."""
         self._ema_fp32_buffer_names = []
-        params = list(self.ema_vision_encoder.parameters())
+        params = [target for _, target in self._ema_parameter_pairs()]
         for idx, param in enumerate(params):
             name = f"_ema_fp32_{idx}"
             self.register_buffer(name, param.detach().float().clone(), persistent=True)
@@ -331,7 +399,7 @@ class SLIMModel(PolicyModel):
         """Synchronize fp32 EMA buffers with the current EMA module weights."""
         if not self.ema_enabled:
             return
-        params = list(self.ema_vision_encoder.parameters())
+        params = [target for _, target in self._ema_parameter_pairs()]
         if len(params) != len(self._ema_fp32_buffer_names):
             raise RuntimeError(
                 f"EMA shadow/parameter count mismatch: "
@@ -380,9 +448,7 @@ class SLIMModel(PolicyModel):
         m = self.ema_momentum
         shadow_names = iter(self._ema_fp32_buffer_names)
         with torch.no_grad():
-            for online_p, ema_p in zip(
-                self.vision_encoder.parameters(), self.ema_vision_encoder.parameters()
-            ):
+            for online_p, ema_p in self._ema_parameter_pairs():
                 self._ema_update_param(online_p, ema_p, next(shadow_names), m)
 
     # -- State helper ---------------------------------------------------------
@@ -425,16 +491,27 @@ class SLIMModel(PolicyModel):
         lang_embs, lang_mask = self._encode_language(
             examples=examples, device=vision_param.device, dtype=vision_param.dtype
         )
-        vl_embs = self._encode_vision(batch_images, lang_embs=lang_embs, lang_mask=lang_mask)
+        vl_embs, representation_losses = self._encode_vision(
+            batch_images, lang_embs=lang_embs, lang_mask=lang_mask, return_aux=True
+        )
         task_mode = str(kwargs.get("mot_task_mode", self.mot_task_mode)).strip().lower()
+        run_policy_dynamics = (
+            task_mode == "policy" and self.policy_dynamics_enabled
+            and bool(kwargs.get("run_policy_dynamics", True))
+        )
         future_vl_embs_cond = None
         future_vl_embs_target = None
         needs_idm_cond = task_mode in {"idm", "idm_fdm"}
-        needs_future_target = task_mode in {"fdm", "idm_fdm"}
+        needs_future_target = task_mode in {"fdm", "idm_fdm"} or run_policy_dynamics
+        current_vl_embs_target = None
+        if needs_future_target and self.action_model.future_delta_loss_weight > 0:
+            current_vl_embs_target = self._encode_vision_ema(
+                batch_images, lang_embs=lang_embs, lang_mask=lang_mask
+            )
         if needs_idm_cond or needs_future_target:
             if "future_image" not in examples[0]:
                 raise ValueError(
-                    "Stage 1 objectives require `future_image` in each example."
+                    "Dynamics objectives require `future_image` in each example."
                 )
             future_images = [example["future_image"] for example in examples]
             # IDM conditions on the actual future observation; keep this online so gradients
@@ -477,6 +554,16 @@ class SLIMModel(PolicyModel):
             if future_vl_embs_target is not None:
                 action_kwargs["future_vl_embs_target"] = future_vl_embs_target
             loss_output = self.action_model(vl_embs, actions, **action_kwargs)
+            if run_policy_dynamics:
+                dynamics = self.action_model.forward_fdm(
+                    vl_embs, actions, future_vl_embs_target,
+                    language=lang_embs, language_mask=lang_mask, state=state_tensor,
+                    current_target=current_vl_embs_target, return_details=True,
+                )
+                loss_output.update(dynamics)
+                loss_output["action_loss"] = (
+                    loss_output["action_loss"] + self.policy_dynamics_weight * dynamics["fdm_loss"]
+                )
         else:
             action_kwargs = {
                 "lang_embs": lang_embs.repeat(repeated_steps, 1, 1) if lang_embs is not None else None,
@@ -490,12 +577,19 @@ class SLIMModel(PolicyModel):
                 action_kwargs["future_vl_embs_cond"] = future_vl_embs_cond.repeat(repeated_steps, 1, 1)
             if future_vl_embs_target is not None:
                 action_kwargs["future_vl_embs_target"] = future_vl_embs_target.repeat(repeated_steps, 1, 1)
+            if current_vl_embs_target is not None:
+                action_kwargs["current_vl_embs_target"] = current_vl_embs_target.repeat(repeated_steps, 1, 1)
             loss_output = self.action_model(
                 vl_embs.repeat(repeated_steps, 1, 1),
                 actions.repeat(repeated_steps, 1, 1),
                 **action_kwargs,
             )
 
+        loss_output.update(representation_losses)
+        if "representation_loss" in representation_losses:
+            loss_output["action_loss"] = (
+                loss_output["action_loss"] + representation_losses["representation_loss"]
+            )
         loss_output["monitor/past_vl_embs"] = vl_embs.detach()
         monitor_future = (
             future_vl_embs_target if future_vl_embs_target is not None else future_vl_embs_cond
@@ -541,8 +635,52 @@ class SLIMModel(PolicyModel):
         loss = self.action_model.eval_future_latent(
             vl_embs,
             gt_future,
+            actions=torch.as_tensor(
+                np.asarray([example["action"] for example in examples], dtype=np.float32),
+                device=vl_embs.device, dtype=vl_embs.dtype,
+            )[:, -self.action_horizon :],
             lang_embs=lang_embs,
             language_encoder_attention_mask=lang_mask,
             state=state_tensor,
         )
         return float(loss.item())
+
+    @torch.inference_mode()
+    def evaluate_dynamics(self, examples: List[dict]) -> dict[str, float]:
+        """Offline diagnostics for an existing checkpoint, without optimizer updates."""
+        if self.training:
+            raise ValueError("Call model.eval() before evaluating dynamics")
+        images = [example["image"] for example in examples]
+        future_images = [example["future_image"] for example in examples]
+        param = next(self.vision_encoder.parameters())
+        language, mask = self._encode_language(examples, param.device, param.dtype)
+        current = self._encode_vision(images, language, mask)
+        current_target = self._encode_vision_ema(images, language, mask)
+        future = self._encode_vision_ema(future_images, language, mask)
+        state = self._extract_state(examples, current.device, current.dtype)
+        actions = torch.as_tensor(
+            np.asarray([example["action"] for example in examples], dtype=np.float32),
+            device=current.device, dtype=current.dtype,
+        )[:, -self.action_horizon :]
+        prediction, delta = self.action_model.predict_future(
+            current, actions, language, mask, state, return_delta=True
+        )
+        real_loss = self.action_model._future_loss(prediction, future)
+        identity_loss = self.action_model._future_loss(current_target, future)
+        metrics = {"fdm_future_loss": float(real_loss), "identity_loss": float(identity_loss)}
+        if len(examples) > 1:
+            shuffled = self.action_model.predict_future(
+                current, actions.roll(1, 0), language, mask, state
+            )
+            shuffled_loss = self.action_model._future_loss(shuffled, future)
+            metrics["shuffled_action_loss"] = float(shuffled_loss)
+            metrics["action_sensitivity_gap"] = float(shuffled_loss - real_loss)
+        if delta is not None:
+            import torch.nn.functional as F
+            target_delta = (
+                F.layer_norm(future.float(), (future.shape[-1],))
+                - F.layer_norm(current_target.float(), (current_target.shape[-1],))
+            )
+            metrics["delta_loss"] = float(F.smooth_l1_loss(delta.float(), target_delta))
+            metrics["zero_delta_loss"] = float(F.smooth_l1_loss(torch.zeros_like(delta).float(), target_delta))
+        return metrics
