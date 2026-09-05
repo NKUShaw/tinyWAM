@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slim-policy"
+version = "0.1.0"
+description = "A compact latent interaction policy for robot manipulation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "SLIM Authors"}]
+keywords = ["robot-learning", "robot-manipulation", "flow-matching", "self-supervised-learning"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "accelerate==1.6.0",
+  "av==16.0.1",
+  "deepspeed==0.16.6",
+  "msgpack==1.1.1",
+  "numpy==2.2.4",
+  "omegaconf==2.3.0",
+  "pillow==12.2.0",
+  "pyarrow==20.0.0",
+  "safetensors==0.7.0",
+  "scipy==1.15.2",
+  "tqdm==4.67.1",
+  "transformers==5.3.0",
+  "wandb==0.27.2",
+  "websockets==16.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.5", "ruff==0.11.10"]
+
+[project.urls]
+Repository = "https://github.com/kzz1031/SLIM"
+Issues = "https://github.com/kzz1031/SLIM/issues"
+
+[tool.setuptools.packages.find]
+include = ["slim*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,7 @@
+defaults:
+  - ../stage1_idm0125_fdm1_h8.yaml
+run:
+  name: libero_all90_stage1_no_ema_h8
+model:
+  ema:
+    enabled: false

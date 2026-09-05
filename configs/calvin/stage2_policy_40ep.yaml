@@ -1,0 +1,101 @@
+# SLIM has no Stage-2 future-latent auxiliary branch, matching the noaux source.
+
+seed: 42
+
+run:
+  name: calvin_abc_d_stage2_policy_40ep
+  root: checkpoints/stage2
+  timestamp: true
+
+model:
+  name: SLIM
+  vision_encoder:
+    backbone_name: dinov2_vitb14
+    model_path: ${oc.env:DINOV2_MODEL_DIR}
+    image_size: 224
+    freeze_backbone: false
+    num_image_views: 2
+    vision_condition_mode: dense_patch
+    image_augment:
+      enabled: false
+  ema:
+    enabled: true
+    momentum: 0.999
+  action_dim: 7
+  state_dim: 15
+  action_horizon: 12
+  use_language_condition: true
+  language_encoder_path: ${oc.env:T5_MODEL_DIR}
+  language_cache: ${oc.env:SLIM_LANGUAGE_CACHE,null}
+  max_language_tokens: 32
+  language_embedding_dim: 512
+  inference_steps: 4
+  repeated_diffusion_steps: 4
+  decoder_hidden_dim: 1024
+  transformer:
+    hidden_dim: 768
+    num_layers: 16
+    num_heads: 12
+    ffn_ratio: 4.0
+    dropout: 0.0
+    num_action_register_tokens: 4
+    num_future_tokens: 512
+    use_state_condition: true
+    max_state_tokens: 1100
+    max_action_tokens: 16
+    policy_loss_weight: 1.0
+    idm_loss_weight: 0.0
+    fdm_loss_weight: 0.0
+    future_loss_type: norm_l1
+
+data:
+  action_key: ${oc.env:CALVIN_ACTION_KEY,action.rel}
+  sources:
+    - root_dir: ${oc.env:CALVIN_LANG_DATASET}
+      data_mix: null
+      video_keys:
+        - observation.images.rgb_static
+        - observation.images.rgb_gripper
+      weight: 1.0
+  action_normalization: q01_q99
+  action_stats_dir: ${oc.env:SLIM_CACHE_DIR,.cache/slim}/action_stats/calvin_abc_d
+  per_device_batch_size: 32
+  episode_shuffle: true
+  eval_batch_size: 8
+  val_ratio: 0.02
+  eval_monitor_episode_ratio: 0.02
+  split_seed: 42
+  num_workers: 16
+  eval_num_workers: 4
+  prefetch_factor: 2
+  persistent_workers: true
+  dataloader_timeout_s: 600
+  video_backend: frames
+
+training:
+  stage: 2
+  objective: policy
+  max_epochs: 40
+  max_train_steps: 200000
+  num_warmup_steps: 2000
+  save_interval: 5000
+  eval_interval: 1000
+  logging_frequency: 20
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 1
+  learning_rate:
+    base: 2.5e-5
+    action_model: 1.0e-4
+    vision_encoder: 1.0e-5
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 1.0e-6
+  optimizer:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+logging:
+  trackers: [jsonl, wandb]
+  project: slim-calvin
+  entity: null

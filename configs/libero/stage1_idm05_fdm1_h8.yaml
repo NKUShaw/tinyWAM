@@ -1,0 +1,9 @@
+defaults:
+  - stage1_idm025_fdm1_h8.yaml
+
+run:
+  name: libero_all90_stage1_idm05_fdm1_h8
+
+model:
+  transformer:
+    idm_loss_weight: 0.5

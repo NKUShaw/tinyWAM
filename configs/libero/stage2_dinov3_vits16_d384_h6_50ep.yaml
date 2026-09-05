@@ -1,0 +1,8 @@
+defaults:
+  - stage2_dinov3_vits16_d384_h6_40ep.yaml
+
+# True continuation target: resume the completed 40-epoch run and stop at
+# 50 total epochs. All optimizer and model hyperparameters remain inherited.
+training:
+  max_epochs: 50
+

@@ -1,0 +1,7 @@
+SLIM includes code derived from the StarVLA research repository. The upstream
+license text, including its attribution requirements, is preserved in LICENSE.
+The action encoder includes NVIDIA-derived code under Apache-2.0; its source
+file retains the required SPDX notice.
+
+LIBERO and LIBERO-Plus are separate projects and are not redistributed here.
+Their licenses apply when those environments are installed.

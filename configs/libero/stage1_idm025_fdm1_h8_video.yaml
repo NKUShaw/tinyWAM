@@ -1,0 +1,8 @@
+defaults:
+  - stage1_idm025_fdm1_h8.yaml
+
+run:
+  name: libero_all90_stage1_idm025_fdm1_h8_video
+
+data:
+  video_backend: torchvision_av

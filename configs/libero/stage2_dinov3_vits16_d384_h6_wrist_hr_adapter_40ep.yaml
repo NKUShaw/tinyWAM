@@ -1,0 +1,21 @@
+defaults:
+  - stage2_dinov3_vits16_d384_h6_40ep.yaml
+
+run:
+  name: libero_all_stage2_dinov3_vits16_d384_h6_wrist_hr_adapter_only_40ep_4gpu_gb128
+
+model:
+  vision_encoder:
+    freeze_backbone: true
+    wrist_detail:
+      enabled: true
+      high_resolution: 256
+      bottleneck_dim: 96
+      freeze_except_adapter: true
+
+training:
+  max_epochs: 40
+  learning_rate:
+    base: 3.0e-4
+    action_model: 0.0
+    vision_encoder: 0.0

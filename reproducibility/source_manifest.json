@@ -1,0 +1,68 @@
+{
+  "source": {
+    "repository": "starVLA",
+    "branch": "starVLA_dev",
+    "commit": "1d171c75e142cc205bd7900aa01db59072562aac",
+    "captured_at": "2026-07-24",
+    "note": "The source working tree was dirty. Runtime file hashes below identify the exact inputs."
+  },
+  "runtime_sha256": {
+    "LIM/datasets/base.py": "b0affcef2371cbc31c829eff2ad13c5ca74da4c202fe398fddd6e21ad4cf451f",
+    "LIM/datasets/mixtures.py": "8cc910fe7607bd37d94404bd0013cd7bb4438ab91ed3a6af6c541f7643e105c2",
+    "LIM/models/dino_xmot_framework.py": "892eb98f9c37e84975fbb0f77ff0f97f1c7f91f52b22be7b3fa421ce4f159376",
+    "LIM/models/vision_encoder.py": "1bcd300b1a72891da01394a1353d0f8c2cdc176e00f9ae1dbb503ebedfcc3f29",
+    "LIM/training/train_dino_mot_common.py": "5f8600ea732d02f317589d7eaa475977b56937913148c9502b4dea7f8dc6c63d",
+    "LIM/training/train_dino_xmot_pretrain.py": "15861ef5b7a293da20de59108e0ac9fab02d269d92ae5f3d13c150fc5c97c051",
+    "LIM/training/train_dino_xmot_post_train.py": "7f5844123da3ca1c16e0780c52413e90dfcf15a421df5cac0c5612f809d77649",
+    "starVLA/model/modules/action_model/LIM_XMoT_ActionHeader.py": "b10d52968b956359d38d2be3901822d7ed226f7e1f5ec59c129fe3a8dcbacf67",
+    "starVLA/model/modules/action_model/flow_matching_head/action_encoder.py": "9639d91c37657df7d34f0162bf621657cc01c672275ecbeb5bdfcc03f65540d1",
+    "deployment/model_server/server_policy.py": "15f452b3205b4008c6f3c26afe47bb2027d4e011b7362a11b00a2bc3c6ca83e8",
+    "deployment/model_server/tools/websocket_policy_server.py": "a174c8eda6d1e761c139c5ffba60fbb2d1bd49caaa20a37b059827fb44ca4e30",
+    "LIM/evaluation/LIBERO/eval_libero.py": "8f4ac47b560e6ddac4d6a519437eb3f1786e933bd2d6b02d7d4c72740d36b04e",
+    "LIM/evaluation/LIBERO/model2libero_interface.py": "4aeb7c3ce3ecc09df0d5112ec31f839f73af548750d1fb46cfd94435b9fab88a",
+    "LIM/evaluation/LIBERO_PLUS/eval_libero_plus.py": "3120266a13094f7dde5383d0cd5678bac93bd2efa4edea50fbad2ceb4551932b"
+  },
+  "migration_reference_config_sha256": {
+    "LIM/configs/xmot_jepa/2026-07-21/pretrain_all90_h8_3ep_seed42_idm05_fdm1.yaml": "ba26e55f956bd338f14da4341829e1b8be2785c310ca71b7c9de7a95499f7012",
+    "LIM/configs/xmot_jepa/2026-07-21/post_all90_noaux_h8_40ep_seed42_idm05_fdm1.yaml": "74c294186b6743e99018fb2772f2eb837fa96b8178ab387df5b36b3d570a0c04"
+  },
+  "assets": {
+    "dinov2_source_tree": "949c3df7acb4b4dd097b6d4c7de228d058f1fded32584d397d0848fb2ab815e2",
+    "dinov2_vitb14_pretrain.pth": "0b8b82f85de91b424aded121c7e1dcc2b7bc6d0adeea651bf73a13307fad8c73",
+    "t5-small/model.safetensors": "bd944e5f1b3ad9b70dd9d00010a517059e19265671076b8b0a4a58d9491842bc",
+    "migration_reference_stage2_checkpoint": "3cb6e964a82ce3db44b56ecc2f4b8d25d6ac4c2fa110b200916306a583b09c32"
+  },
+  "training_environment": {
+    "python": "3.12.9",
+    "torch": "2.6.0+cu124",
+    "torchvision": "0.21.0+cu124",
+    "accelerate": "1.6.0",
+    "deepspeed": "0.16.6",
+    "transformers": "5.3.0",
+    "numpy": "2.2.4",
+    "omegaconf": "2.3.0",
+    "av": "16.0.1",
+    "pyarrow": "20.0.0",
+    "pillow": "12.2.0",
+    "scipy": "1.15.2",
+    "wandb": "0.27.2",
+    "websockets": "16.0"
+  },
+  "evaluation_environments": {
+    "python": "3.11.8",
+    "mujoco": "3.3.2",
+    "torch": "2.7.1+cu126",
+    "torchvision": "0.22.1+cu126",
+    "numpy": "1.26.4",
+    "robosuite": "1.4.0",
+    "libero": "0.1.0",
+    "libero_commit": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+    "libero_plus_commit": "4976dc30028e805ff8094b55501d532c48fec182"
+  },
+  "migration_reference_results": {
+    "libero_success_rate": 0.9785,
+    "libero_tolerance": 0.005,
+    "libero_plus_success_rate": 0.7582,
+    "libero_plus_tolerance": 0.003
+  }
+}

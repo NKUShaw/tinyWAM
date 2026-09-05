@@ -1,0 +1,22 @@
+defaults:
+  - stage1_idm0125_fdm1_h8.yaml
+
+run:
+  name: libero_all90_stage1_dinov3_vits16_d384_h6
+
+model:
+  vision_encoder:
+    backbone_name: dinov3_vits16_lvd1689m
+    model_path: ${oc.env:DINOV3_VITS16_MODEL_DIR}
+    image_size: 224
+    freeze_backbone: false
+    num_image_views: 2
+    vision_condition_mode: dense_patch
+  transformer:
+    hidden_dim: 384
+    num_layers: 16
+    num_heads: 6
+    ffn_ratio: 4.0
+    num_future_tokens: 392
+    max_state_tokens: 800
+
