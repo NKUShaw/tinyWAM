@@ -1,0 +1,7 @@
+defaults:
+  - stage2_factorized.yaml
+run:
+  name: decorrelated_dense
+model:
+  control_latent:
+    decorrelation_weight: 0.01

@@ -57,6 +57,9 @@ def _sync_ema_vision_from_online(model) -> None:
         return
     if getattr(model, "ema_vision_encoder", None) is None:
         return
+    if hasattr(model, "sync_ema_from_online"):
+        model.sync_ema_from_online()
+        return
     model.ema_vision_encoder.load_state_dict(model.vision_encoder.state_dict())
     if hasattr(model, "refresh_ema_fp32_shadow"):
         model.refresh_ema_fp32_shadow()
@@ -69,6 +72,9 @@ def _load_initial_weights(
     init_mode: str = "slim_policy",
     skip_prefixes: tuple[str, ...] = (),
 ):
+    if init_mode == "control_warm_start":
+        from slim.model.initialization import load_control_warm_start
+        return load_control_warm_start(model, ckpt_path, logger, skip_prefixes)
     state_dict = torch.load(ckpt_path, map_location="cpu")
     model_sd = model.state_dict()
     if init_mode == "vision_only":
@@ -152,6 +158,20 @@ def _require_stage2_slim_config(cfg) -> None:
     objective = str(cfg.training.get("objective", "")).strip().lower()
     if objective != "policy":
         raise ValueError(f"Stage 2 requires training.objective=policy, got {objective!r}")
+    dynamics = cfg.model.get("policy_dynamics", {})
+    if dynamics.get("enabled", False):
+        if int(dynamics.get("every_n_steps", 4)) < 1:
+            raise ValueError("policy_dynamics.every_n_steps must be positive")
+        if not cfg.model.get("ema", {}).get("enabled", False):
+            raise ValueError("policy_dynamics requires model.ema.enabled=true")
+
+
+def policy_dynamics_step(cfg, completed_steps: int) -> bool:
+    """All microbatches of one optimizer update use the same auxiliary objective."""
+    dynamics = cfg.model.get("policy_dynamics", {})
+    return bool(dynamics.get("enabled", False)) and (
+        completed_steps % int(dynamics.get("every_n_steps", 4)) == 0
+    )
 
 
 def main(
@@ -190,7 +210,8 @@ def main(
         )
 
     train_loader, val_loader, train_ds = build_dataloaders(
-        cfg, include_future_image=False, logger=logger
+        cfg, include_future_image=bool(cfg.model.get("policy_dynamics", {}).get("enabled", False)),
+        logger=logger,
     )
     if accelerator.is_main_process:
         OmegaConf.save(cfg, run_dir / "config.yaml")
@@ -300,7 +321,10 @@ def main(
             batch = next(train_iter)
 
         with accelerator.accumulate(model):
-            loss_dict = model.forward(batch, mot_task_mode="policy")
+            loss_dict = model.forward(
+                batch, mot_task_mode="policy",
+                run_policy_dynamics=policy_dynamics_step(cfg, completed_steps),
+            )
             loss = loss_dict["action_loss"]
             accelerator.backward(loss)
             if (
@@ -330,6 +354,12 @@ def main(
                 "train/flow_loss": scalar_or_none(loss_dict.get("policy_loss")),
                 "train/lr": float(scheduler.get_last_lr()[0]),
             }
+            if cfg.model.get("policy_dynamics", {}).get("enabled", False):
+                payload["train/dynamics_active"] = int("fdm_loss" in loss_dict)
+            for key in ("fdm_loss", "future_loss", "delta_loss", "representation_loss",
+                        "reconstruction_loss", "decorrelation_loss", "variance_loss"):
+                if key in loss_dict:
+                    payload[f"train/{key}"] = scalar_or_none(loss_dict[key])
             if "wandb" in cfg.logging.trackers:
                 wandb.log(payload, step=completed_steps)
             logger.info(f"[train] step={completed_steps} {payload}")

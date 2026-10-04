@@ -1,0 +1,7 @@
+defaults:
+  - stage2_slots64.yaml
+run:
+  name: control_slots64_delta
+model:
+  transformer:
+    future_delta_loss_weight: 0.1

@@ -1,0 +1,20 @@
+defaults:
+  - stage1_frozen_baseline.yaml
+run:
+  name: factorized_dense
+model:
+  control_latent:
+    enabled: true
+    control_dim: 192
+    residual_dim: 192
+    tokens_per_view: 0
+    num_heads: 3
+    reconstruction_weight: 1.0
+    decorrelation_weight: 0.0
+    variance_weight: 0.1
+    variance_floor: 0.5
+  transformer:
+    future_delta_loss_weight: 0.0
+training:
+  learning_rate:
+    base: 1.0e-4

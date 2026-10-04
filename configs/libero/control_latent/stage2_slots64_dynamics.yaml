@@ -1,0 +1,13 @@
+defaults:
+  - stage2_slots64.yaml
+run:
+  name: control_slots64_dynamics
+# Preserve the complete trained EMA pipeline from the matching Stage 1 checkpoint.
+resume_skip_prefixes: []
+model:
+  ema:
+    enabled: true
+  policy_dynamics:
+    enabled: true
+    every_n_steps: 4
+    loss_weight: 0.1

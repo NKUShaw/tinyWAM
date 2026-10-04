@@ -43,6 +43,8 @@ def to_runtime_config(config: Any) -> DictConfig:
     transformer = model.pop("transformer")
     vision = model.pop("vision_encoder")
     ema = model.pop("ema", {"enabled": True, "momentum": 0.999})
+    control_latent = model.pop("control_latent", {"enabled": False})
+    policy_dynamics = model.pop("policy_dynamics", {"enabled": False})
 
     action_model = {
         "use_future_image_condition": bool(training["stage"] == 1),
@@ -84,6 +86,8 @@ def to_runtime_config(config: Any) -> DictConfig:
             "name": "SLIM",
             "dino": vision,
             "ema": ema,
+            "control_latent": control_latent,
+            "policy_dynamics": policy_dynamics,
             "action_model": action_model,
         },
         "datasets": {"vla_data": dataset},
@@ -119,6 +123,8 @@ def to_public_config(config: Any) -> DictConfig:
             "name": "SLIM",
             "vision_encoder": deepcopy(fw["dino"]),
             "ema": deepcopy(fw.get("ema", {})),
+            "control_latent": deepcopy(fw.get("control_latent", {"enabled": False})),
+            "policy_dynamics": deepcopy(fw.get("policy_dynamics", {"enabled": False})),
             "action_dim": action["action_dim"],
             "state_dim": action["state_dim"],
             "action_horizon": action["action_horizon"],

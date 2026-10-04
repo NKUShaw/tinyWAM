@@ -1,0 +1,20 @@
+defaults:
+  - stage1_factorized.yaml
+  - ../stage2_dinov3_vits16_d384_h6_40ep.yaml
+run:
+  root: checkpoints/control_latent/stage2
+  name: factorized_dense
+resume_skip_prefixes:
+  - ema_vision_encoder.
+  - ema_control_encoder.
+  - _ema_fp32_
+model:
+  vision_encoder:
+    freeze_backbone: true
+  policy_dynamics:
+    enabled: false
+    every_n_steps: 4
+    loss_weight: 0.1
+training:
+  learning_rate:
+    base: 1.0e-4
